@@ -12,6 +12,7 @@
 #include "loader.h"
 #include "ufs.h"
 #include "fdt.h"
+#include "touchlab.h"
 
 #define IMEM_RESTART_REASON	0x0c12565cUL	/* qcom,msm-imem@c125000 restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -558,6 +559,12 @@ void shim_main(uint64_t dtb)
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
 	con_hex2("MIDR", "el1=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
 	show_panel(dtb);
+#ifdef TOUCHLAB
+	/* Touch test bench only: no xnu boot afterwards (Power + Vol- to leave). */
+	touchlab_run();
+	for (;;)
+		__asm__ volatile("wfe");
+#endif
 	if (((mmfr0 >> 20) & 0xf) == 0) {
 		con_str("SILVER", "no 16K granule: handing off to gold CPU 0x100");
 		con_skip();
