@@ -1,0 +1,32 @@
+From: dennitino <alanw6118@gmail.com>
+Date: Thu, 29 Oct 2026 20:40:00 -0300
+Subject: [PATCH] topaz-0951: touch: read FT5452 frames from register 0x01
+
+On a Redmi Note 12 4G with an aftermarket TFT LCD panel (FT5452 fw 0x32,
+vendor 0x48) every frame read from register 0x00 is all zeros and no
+contact is ever reported. A bare-metal test from the shim (shim/touchlab.c)
+showed the same controller returning real contacts when the read starts at
+register 0x01, which is what Android's focaltech_ts_i2c driver does on
+every panel. Read 0x01.. into buf + 1 so the parser keeps its layout.
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 370d18b..ca050c7 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -478,7 +478,15 @@ touch_focaltech(void)
+ 	uint8_t buf[63];
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0, seen = 0;
+-	int err = touch_read(0x38, 0, false, buf, sizeof(buf));
++	/*
++	 * topaz: the FT5452 on aftermarket TFT LCD panels (fw 0x32, vendor 0x48)
++	 * returns all zeros when a read starts at register 0x00, while reads from
++	 * 0x01 carry the touches; Android's focaltech_ts_i2c reads from 0x01
++	 * (gesture id, TD_STATUS, points) on every panel. Read 0x01.. into buf + 1
++	 * so buf[] keeps the classic layout (buf[0], the device mode, is unused).
++	 */
++	buf[0] = 0;
++	int err = touch_read(0x38, 1, false, buf + 1, sizeof(buf) - 1);
+ 	if (err) {
+ 		return err;
+ 	}
