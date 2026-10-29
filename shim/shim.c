@@ -11,6 +11,7 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#include "fdt.h"
 
 #define IMEM_RESTART_REASON	0x0c12565cUL	/* qcom,msm-imem@c125000 restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -501,6 +502,49 @@ static uint32_t to_us(uint64_t ticks)
 	return ticks * 10 / 192;	/* 19.2 MHz */
 }
 
+/*
+ * Show which display panel ABL detected (msm_drm.dsi_display0=... in the
+ * bootargs it passes). topaz ships with panels m7 38 0c 0a and 0c 0b; their
+ * touch firmware differs. Kept on screen for 15 s.
+ */
+static void show_panel(uint64_t dtb)
+{
+	const char *ba = fdt_chosen_str(dtb, "bootargs");
+	if (!ba) {
+		con_str("PANEL", "no /chosen/bootargs");
+		return;
+	}
+	const char *key = "dsi_display0=";
+	const char *hit = 0;
+	for (const char *p = ba; *p && !hit; p++) {
+		const char *a = p, *b = key;
+		while (*b && *a == *b)
+			a++, b++;
+		if (!*b)
+			hit = a;
+	}
+	if (!hit) {
+		con_str("PANEL", "dsi_display0 not in bootargs");
+		return;
+	}
+	char line[38];
+	const char *label = "PANEL";
+	const char *p = hit;
+	for (int n = 0; n < 4 && *p && *p != ' '; n++) {
+		int i = 0;
+		while (i < 37 && p[i] && p[i] != ' ') {
+			line[i] = p[i];
+			i++;
+		}
+		line[i] = 0;
+		con_str(label, line);
+		label = "";
+		p += i;
+	}
+	con_str("PANEL", "photo now - 15 s");
+	delay_ms(15000);
+}
+
 void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
@@ -513,6 +557,7 @@ void shim_main(uint64_t dtb)
 	uint64_t mmfr0 = rsr("id_aa64mmfr0_el1");
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
 	con_hex2("MIDR", "el1=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
+	show_panel(dtb);
 	if (((mmfr0 >> 20) & 0xf) == 0) {
 		con_str("SILVER", "no 16K granule: handing off to gold CPU 0x100");
 		con_skip();

@@ -82,3 +82,43 @@ int fdt_chosen_u64(uintptr_t fdt, const char *prop, uint64_t *out)
 		}
 	}
 }
+
+const char *fdt_chosen_str(uintptr_t fdt, const char *prop)
+{
+	if (!fdt || be32(fdt) != FDT_MAGIC)
+		return 0;
+	uintptr_t p = fdt + be32(fdt + 8);
+	uintptr_t strings = fdt + be32(fdt + 12);
+	int depth = 0, in_chosen = 0;
+
+	for (;;) {
+		uint32_t tok = be32(p);
+		p += 4;
+		switch (tok) {
+		case FDT_BEGIN_NODE: {
+			const char *name = (const char *)p;
+			depth++;
+			in_chosen = depth == 2 && streq(name, "chosen");
+			p = align4(skip_str(p));
+			break;
+		}
+		case FDT_END_NODE:
+			if (in_chosen)
+				return 0;
+			depth--;
+			break;
+		case FDT_PROP: {
+			uint32_t len = be32(p), nameoff = be32(p + 4);
+			uintptr_t val = p + 8;
+			if (in_chosen && len && streq((const char *)(strings + nameoff), prop))
+				return (const char *)val;
+			p = align4(val + len);
+			break;
+		}
+		case FDT_NOP:
+			break;
+		default:
+			return 0;
+		}
+	}
+}
