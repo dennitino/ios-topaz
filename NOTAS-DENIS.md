@@ -15,8 +15,17 @@ A branch `topaz` acompanha o projeto original; as nossas mudanças ficam aqui, n
 
 ## Situação (29/10/2026)
 
-- **Funciona:** boot até a tela de bloqueio, relógio, botões de volume e power, Siri.
-- **Não funciona:** toque.
+- **Funciona:** boot até a tela inicial, **toque** (com o patch 0951), relógio, botões de volume
+  e power, Siri.
+
+### Solução do toque (29/10/2026)
+
+O chip da tela paralela devolve só zeros quando a leitura começa no registrador **0x00** e
+devolve os toques quando começa no **0x01**, que é como o driver do Android lê. Descoberto com o
+laboratório da shim (`shim/touchlab.c`, `SHIM_CFLAGS=-DTOUCHLAB`). Correção:
+`xnu/patches/0951-topaz-touch-read-from-reg-01.patch`. Testado no aparelho com o kernel
+`e477291` alterado direto no binário (3 instruções em `_touch_thread`); o toque levou até a tela
+inicial.
 
 ### Diagnóstico do toque
 
