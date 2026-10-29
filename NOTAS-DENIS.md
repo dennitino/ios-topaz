@@ -9,7 +9,8 @@ A branch `topaz` acompanha o projeto original; as nossas mudanças ficam aqui, n
 | --- | --- |
 | Modelo | Redmi Note 12 4G (`topaz`), Snapdragon 685, 8 GB de RAM |
 | Android antes do iOS | HyperOS 2.0.209 Global (`VMTMIXM`) |
-| Chip de toque | FocalTech FT5452 (chip-id `54:52`), vendor `0x48`, **firmware `0x32`** |
+| Tela | **Paralela TFT LCD** (4STORE PREMIUM, modelo TXR-N12), no lugar da AMOLED original. O ABL a identifica como `m7 38 0c 0a` |
+| Chip de toque | Responde como FocalTech FT5452 (chip-id `54:52`), vendor `0x48`, **firmware `0x32`** (vem com a tela paralela) |
 | iOS gravado | iOS 16.7.16 (20H392) do iPhone X, partição `userdata` |
 
 ## Situação (29/10/2026)
@@ -39,10 +40,19 @@ SWEET TOUCH stats: frames=315 errs=0 lasterr=0 maxn=0 hid down=0 up=0 last=0,0 |
 - Segurar o reset por 500 ms depois do AVDD e esperar 1 s depois do reset
   (`touch_wait(20)` → 500 e `touch_wait(250)` → 1000), no kernel `e477291`.
 
+### Causa provável (29/10/2026)
+
+A tela foi trocada por uma **paralela TFT LCD**. O chip de toque fica no conjunto da tela, então
+o firmware `0x32` é o da peça paralela, não o da tela AMOLED original (`0x36`). Numa tela LCD desse
+tipo o toque costuma depender do sincronismo com a imagem; o driver do Android funciona com ela,
+o do ios-topaz (testado só com a tela original) não. Pinos (IRQ 80, reset 86, AVDD 36) e tela
+reportada (`m7 38 0c 0a`) são os mesmos da device tree oficial.
+
 ### Próximos passos
 
-1. Extrair da ROM oficial 2.0.209 (`vendor` / `vendor_dlkm`) o driver FocalTech do Android
-   e o firmware do toque, e comparar a inicialização com `bsd/dev/sweet_touch.c`.
+1. Feito: o driver do Android (`focaltech_ts_i2c.ko`, IC "ft3519t", vendor "samsung") só faz reset,
+   espera 200 ms e lê a partir do registrador 0x01; nenhum comando extra. Testar `sweetfb_hz=60`.
+   Caminho garantido: tela AMOLED original.
 2. Perguntado ao desenvolvedor (MakrSas) se o firmware `0x32` precisa de algum passo extra.
 
 ## Como gerar e dar boot
