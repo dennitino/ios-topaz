@@ -82,16 +82,16 @@ The kernel's own join at boot now needs wifi_standing=1.
  	memcpy(result->elements, bss->elements, result->elements_length);
 +	if (boot_network_is(bss->ssid, bss->ssid_length)) {
 +		/* shown as open: the privacy bit off, the RSN (48) and WPA (221, 00:50:f2 type 1) elements left out */
-+		unsigned kept = 0;
++		unsigned kept = 0, length = result->elements_length;
 +
 +		result->capability = (uint16_t)(result->capability & ~0x0010u);
-+		for (unsigned at = 0; at + 2 <= result->elements_length && at + 2 + result->elements[at + 1] <= result->elements_length;
-+		    at += 2 + result->elements[at + 1]) {
-+			const uint8_t *e = result->elements + at;
++		bzero(result->elements, sizeof(result->elements));
++		for (unsigned at = 0; at + 2 <= length && at + 2 + bss->elements[at + 1] <= length; at += 2 + bss->elements[at + 1]) {
++			const uint8_t *e = bss->elements + at;
 +			bool wpa = e[0] == 221 && e[1] >= 4 && e[2] == 0x00 && e[3] == 0x50 && e[4] == 0xf2 && e[5] == 0x01;
 +
 +			if (e[0] != 48 && !wpa) {
-+				memmove(result->elements + kept, e, 2u + e[1]);
++				memcpy(result->elements + kept, e, 2u + e[1]);
 +				kept += 2u + e[1];
 +			}
 +		}
