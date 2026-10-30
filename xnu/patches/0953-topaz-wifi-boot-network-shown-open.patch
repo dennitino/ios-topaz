@@ -1,0 +1,153 @@
+From: dennitino <alanw6118@gmail.com>
+Date: Fri, 30 Oct 2026 03:30:00 -0300
+Subject: [PATCH] topaz-0953: wifi: the boot-args' network is shown to wifid as open
+
+0952's standing join brings the link up, but iOS does nothing with it: wifid
+did not ask for it, so configd never starts DHCP and no frame goes out. Let
+wifid ask instead. A network whose name and passphrase are in the boot-args
+(wifi_ssid=, wifi_psk=) is shown to wifid as open: privacy bit off, RSN and
+WPA elements left out, authentication answered as open. Tapping it in
+Settings then opens no password sheet, wifid sends an ASSOCIATE without a
+key, and that is joined with WPA2 and the passphrase from the boot-args.
+The kernel's own join at boot now needs wifi_standing=1.
+
+--- a/bsd/dev/redwood_apple80211.c
++++ b/bsd/dev/redwood_apple80211.c
+@@ -43,6 +43,7 @@
+ #include <sys/redwood_sta.h>
+ #include <sys/sockio.h>
+ #include <sys/systm.h>
++#include <pexpert/pexpert.h>
+ 
+ #define SIOCSA80211             0x802869c8u     /* _IOW('i', 200, struct apple80211req) */
+ #define SIOCGA80211             0xc02869c9u     /* _IOWR('i', 201, struct apple80211req) */
+@@ -240,6 +241,54 @@
+ 	       request->req_len);
+ }
+ 
++
++/*
++ * topaz: a WPA2 network whose password is in the boot-args (wifi_ssid=NAME wifi_psk=PASSPHRASE)
++ * is shown to wifid as an open one: no privacy bit, no RSN or WPA element. Tapping it in Settings
++ * then asks for no password (the password sheet does not open on some phones), wifid sends an
++ * ASSOCIATE without a key, and the join is made here with the passphrase from the boot-args.
++ * Everything after it (DHCP, the network marked as joined) is wifid's and configd's own way.
++ * A value starting with '#' is a placeholder: nothing is shown differently.
++ */
++static bool
++boot_network(uint8_t ssid[33], size_t *ssid_length, uint8_t psk[64], size_t *psk_length)
++{
++	char s[33], k[64];
++
++	bzero(s, sizeof(s));
++	bzero(k, sizeof(k));
++	*ssid_length = *psk_length = 0;
++	if (!PE_parse_boot_arg_str("wifi_ssid", s, (int)sizeof(s)) || s[0] == '\0' || s[0] == '#' ||
++	    !PE_parse_boot_arg_str("wifi_psk", k, (int)sizeof(k)) || k[0] == '\0' || k[0] == '#') {
++		return false;
++	}
++	s[sizeof(s) - 1] = '\0';
++	k[sizeof(k) - 1] = '\0';
++	*ssid_length = strlen(s);
++	*psk_length = strlen(k);
++	if (*ssid_length > 32 || *psk_length < 8 || *psk_length > 63) {
++		bzero(k, sizeof(k));
++		return false;
++	}
++	memcpy(ssid, s, *ssid_length + 1);
++	if (psk != NULL) {
++		memcpy(psk, k, *psk_length + 1);
++	}
++	bzero(k, sizeof(k));
++	return true;
++}
++
++/* Is this the network of the boot-args, to be shown as open? */
++static bool
++boot_network_is(const uint8_t *ssid, size_t length)
++{
++	uint8_t name[33];
++	size_t name_length, psk_length;
++
++	return length != 0 && boot_network(name, &name_length, NULL, &psk_length) && name_length == length &&
++	       memcmp(name, ssid, length) == 0;
++}
++
+ /* An access point in the form a scan's result has; the caller has said how much room for elements there is. */
+ static int
+ give_network(const struct apple80211req *request, const struct redwood_sta_bss *bss)
+@@ -267,6 +316,23 @@
+ 	result->age_ms = bss->age_ms;
+ 	result->elements_length = (uint16_t)(bss->elements_length <= room ? bss->elements_length : 0);
+ 	memcpy(result->elements, bss->elements, result->elements_length);
++	if (boot_network_is(bss->ssid, bss->ssid_length)) {
++		/* shown as open: the privacy bit off, the RSN (48) and WPA (221, 00:50:f2 type 1) elements left out */
++		unsigned kept = 0;
++
++		result->capability = (uint16_t)(result->capability & ~0x0010u);
++		for (unsigned at = 0; at + 2 <= result->elements_length && at + 2 + result->elements[at + 1] <= result->elements_length;
++		    at += 2 + result->elements[at + 1]) {
++			const uint8_t *e = result->elements + at;
++			bool wpa = e[0] == 221 && e[1] >= 4 && e[2] == 0x00 && e[3] == 0x50 && e[4] == 0xf2 && e[5] == 0x01;
++
++			if (e[0] != 48 && !wpa) {
++				memmove(result->elements + kept, e, 2u + e[1]);
++				kept += 2u + e[1];
++			}
++		}
++		result->elements_length = (uint16_t)kept;
++	}
+ 	/* the rates it says it has (elements 1 and 50: units of 500 kbit/s, the top bit marks the ones everybody must have) */
+ 	for (unsigned at = 0; at + 2 <= bss->elements_length && at + 2 + bss->elements[at + 1] <= bss->elements_length;
+ 	    at += 2 + bss->elements[at + 1]) {
+@@ -441,6 +507,10 @@
+ 			uint32_t version, lower, upper, extended;
+ 		} answer = { .version = 1, .lower = 1, .upper = 8 };
+ 
++		if (boot_network_is(state->bss.ssid, state->bss.ssid_length)) {
++			answer.upper = 0;               /* (shown as open: see boot_network) */
++		}
++
+ 		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
+ 		break;
+ 	}
+@@ -539,7 +609,19 @@
+ 	memcpy(what->ssid, asked->ssid, asked->ssid_length);
+ 	memcpy(what->bssid, asked->bssid, sizeof(what->bssid));
+ 	if (asked->key_length == 0) {
++		uint8_t name[33], psk[64];
++		size_t name_length, psk_length;
++
+ 		what->security = REDWOOD_STA_OPEN;
++		if (boot_network(name, &name_length, psk, &psk_length) && name_length == what->ssid_length &&
++		    memcmp(name, what->ssid, name_length) == 0) {
++			/* the network shown as open: joined with the passphrase from the boot-args */
++			what->security = REDWOOD_STA_WPA2_PSK;
++			what->passphrase_length = (uint8_t)psk_length;
++			memcpy(what->passphrase, psk, psk_length);
++			strlcat(said, " (the boot-args' network: WPA2 with their passphrase)", said_size);
++		}
++		bzero(psk, sizeof(psk));
+ 	} else if (asked->key_cipher == CIPHER_PASSPHRASE && asked->key_length >= 8 && asked->key_length <= 63) {
+ 		what->security = REDWOOD_STA_WPA2_PSK;
+ 		what->passphrase_length = (uint8_t)asked->key_length;
+--- a/bsd/dev/topaz_sta.c
++++ b/bsd/dev/topaz_sta.c
+@@ -205,8 +205,16 @@
+ 	static struct redwood_sta_join what;
+ 	char ssid[33], psk[64];
+ 	size_t ssid_length = 0, psk_length = 0;
+-	int error;
++	int error, standing = 0;
+ 
++	/*
++	 * topaz-0953: by default the boot-args' network is only shown to wifid as open
++	 * (bsd/dev/redwood_apple80211.c) and joined when it is tapped in Settings, so that wifid
++	 * and configd do the rest (DHCP). wifi_standing=1: the kernel joins it by itself as well.
++	 */
++	if (!PE_parse_boot_argn("wifi_standing", &standing, sizeof(standing)) || standing == 0) {
++		return;
++	}
+ 	bzero(ssid, sizeof(ssid));
+ 	bzero(psk, sizeof(psk));
+ 	if (!PE_parse_boot_argn("wifi_ssid", ssid, sizeof(ssid)) || ssid[0] == '\0' || ssid[0] == '#') {
