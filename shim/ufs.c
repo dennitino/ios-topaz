@@ -285,7 +285,7 @@ static char lv_text[LV_MAX][LV_LINE];
 static uint32_t lv_len[LV_MAX];
 
 /* the words, separated by '|' (one string: no pointer table, the shim has no relocations) */
-static const char lv_words[] = "join|wpa:|link|configd|ASSOCIATE|dropped:|keys|auth|assoc|boot-args|DHCP|ipconfig|panic|station says";
+static const char lv_words[] = "join|wpa:|link|configd|ASSOCIATE|dropped:|keys installed|auth|assoc|boot-args|DHCP|ipconfig|panic|station says|RedwoodWLAN|IONetwork|en0";
 
 static int lv_has_n(const uint8_t *line, uint32_t len, const char *w, uint32_t wl)
 {
