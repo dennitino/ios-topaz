@@ -105,3 +105,26 @@ void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint
 	}
 	row++;
 }
+
+/* Small text (font at scale 2) at pixel row y, for the log viewer: n characters of s. */
+void con_small(int y, const char *s, int n, uint32_t fg, uint32_t bg)
+{
+	for (int col = 0; col < n; col++) {
+		char ch = s[col];
+		if (ch < 0x20 || ch > 0x7e)
+			ch = ' ';
+		const unsigned char *g = font8x16[ch - 0x20];
+		int x0 = MARGIN + col * 16;
+		if (x0 + 16 > FB_W || y + 32 > FB_H)
+			return;
+		for (int gy = 0; gy < 16; gy++)
+			for (int gx = 0; gx < 8; gx++) {
+				uint32_t c = (g[gy] & (0x80 >> gx)) ? fg : bg;
+				volatile uint32_t *p = con_fb + (y + gy * 2) * (FB_STRIDE / 4) + x0 + gx * 2;
+				p[0] = c;
+				p[1] = c;
+				p[FB_STRIDE / 4] = c;
+				p[FB_STRIDE / 4 + 1] = c;
+			}
+	}
+}

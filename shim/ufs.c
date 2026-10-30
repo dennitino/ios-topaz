@@ -264,3 +264,239 @@ void test_ufs(void)
 		return;
 	list_partitions(elba, nent);
 }
+
+/*
+ * LOGVIEW (SHIM_CFLAGS=-DLOGVIEW): show what the last iOS boot wrote to the
+ * console, from the persistent log of kernel patch 0047 (the last 1025 blocks
+ * of "userdata": a header block, then a 4 MiB ring). Only the lines with one
+ * of the words below, the newest ones last, a page every 20 s, forever.
+ * READ-ONLY like the rest of this file: no SCSI WRITE is ever issued.
+ */
+#define LOG_RING	(4u << 20)
+#define LOG_BLOCKS	(1u + LOG_RING / BLOCK)
+#define LV_COLS		64
+#define LV_ROWS		70
+#define LV_MAX		1000
+#define LV_LINE		(3 * LV_COLS)
+#define LV_CHUNK	16u		/* blocks read at a time */
+
+static uint8_t lv_chunk[LV_CHUNK * BLOCK] __attribute__((aligned(4096)));
+static char lv_text[LV_MAX][LV_LINE];
+static uint32_t lv_len[LV_MAX];
+
+/* the words, separated by '|' (one string: no pointer table, the shim has no relocations) */
+static const char lv_words[] = "join|wpa:|link|configd|ASSOCIATE|dropped:|keys|auth|assoc|boot-args|DHCP|ipconfig|panic|station says";
+
+static int lv_has_n(const uint8_t *line, uint32_t len, const char *w, uint32_t wl)
+{
+	for (uint32_t i = 0; i + wl <= len; i++) {
+		uint32_t k = 0;
+		while (k < wl && line[i + k] == (uint8_t)w[k])
+			k++;
+		if (k == wl)
+			return 1;
+	}
+	return 0;
+}
+
+static int lv_has(const uint8_t *line, uint32_t len, const char *w)
+{
+	uint32_t wl = 0;
+	while (w[wl])
+		wl++;
+	return lv_has_n(line, len, w, wl);
+}
+
+static int lv_wanted(const uint8_t *line, uint32_t len)
+{
+	const char *w = lv_words;
+	while (*w) {
+		uint32_t wl = 0;
+		while (w[wl] && w[wl] != '|')
+			wl++;
+		if (wl && lv_has_n(line, len, w, wl))
+			return 1;
+		w += wl;
+		if (*w == '|')
+			w++;
+	}
+	return 0;
+}
+
+static void lv_wait_s(unsigned s)
+{
+	uint64_t t = ticks();
+	while (ticks() - t < (uint64_t)s * 19200000u)
+		;
+}
+
+/* The UFS host as ABL left it, our transfer list in place. 0: ready. */
+static int lv_take_host(void)
+{
+	uint32_t hcs = ufs_rd(REG_HCS), hce = ufs_rd(REG_HCE);
+	if (!(hce & 1) || !(hcs & HCS_DP) || !(hcs & HCS_UTRLRDY) || ufs_rd(REG_UTRLDBR))
+		return 1;
+	ufs_wr(REG_UTRLRSR, 0);
+	uintptr_t list = (uintptr_t)utrl;
+	ufs_wr(REG_UTRLBA, (uint32_t)list);
+	ufs_wr(REG_UTRLBAU, (uint32_t)(list >> 32));
+	ufs_wr(REG_UTRLRSR, 1);
+	if (ufs_rd(REG_UTRLBA) != (uint32_t)list || ufs_rd(REG_UTRLBAU) != (uint32_t)(list >> 32) ||
+	    !(ufs_rd(REG_UTRLRSR) & 1))
+		return 2;
+	uint32_t ocs, st;
+	static const uint8_t tur[6] = { 0x00 };
+	for (int i = 0; i < 3; i++)
+		if (!scsi(0, tur, sizeof(tur), 0, 0, &ocs, &st))
+			return 0;
+	return 3;
+}
+
+/* userdata's first block and number of blocks, from the GPT. 0: found. */
+static int lv_userdata(uint64_t *first, uint64_t *count)
+{
+	static uint8_t ents[128 * 128] __attribute__((aligned(4096)));
+	if (read_blocks(0, 2, data))
+		return 1;
+	const uint8_t *gpt = data + BLOCK;
+	uint32_t nent = gpt[80] | gpt[81] << 8 | gpt[82] << 16, esz = gpt[84] | gpt[85] << 8;
+	uint32_t elba = gpt[72] | gpt[73] << 8;
+	if (gpt[0] != 'E' || gpt[1] != 'F' || gpt[2] != 'I' || esz != 128 || nent > 128)
+		return 2;
+	if (read_blocks(elba, (nent * 128 + BLOCK - 1) / BLOCK, ents))
+		return 3;
+	for (uint32_t i = 0; i < nent; i++) {
+		const uint8_t *e = ents + i * 128;
+		static const char want[] = "userdata";
+		int same = 1;
+		for (int c = 0; c < 9; c++)
+			if (e[56 + 2 * c] != (uint8_t)want[c] || e[57 + 2 * c] != 0)
+				same = 0;
+		if (same) {
+			*first = le64(e + 32);
+			*count = le64(e + 40) - *first + 1;
+			return 0;
+		}
+	}
+	return 4;
+}
+
+void logview_run(void)
+{
+	uint64_t first = 0, count = 0;
+	int rc;
+
+	con_skip();
+	con_str("LOGVIEW", "log of the last iOS boot");
+	if ((rc = lv_take_host()) != 0) {
+		con_hex2("LOGVIEW", "no UFS host, rc=", (uint32_t)rc, 0, 0);
+		return;
+	}
+	if ((rc = lv_userdata(&first, &count)) != 0 || count < 2 * LOG_BLOCKS) {
+		con_hex2("LOGVIEW", "no userdata, rc=", (uint32_t)rc, 0, 0);
+		return;
+	}
+	uint64_t base = first + count - LOG_BLOCKS;
+	if (read_blocks((uint32_t)base, 1, data)) {
+		con_str("LOGVIEW", "header read error");
+		return;
+	}
+	static const char magic[] = "SWEETLOG";
+	for (int i = 0; i < 8; i++)
+		if (data[i] != (uint8_t)magic[i]) {
+			con_str("LOGVIEW", "no log there (boot iOS once first)");
+			return;
+		}
+	uint32_t size = data[12] | data[13] << 8 | data[14] << 16 | (uint32_t)data[15] << 24;
+	uint64_t total = le64(data + 16);
+	if (size != LOG_RING) {
+		con_hex2("LOGVIEW", "odd ring size=", size, 0, 0);
+		return;
+	}
+	con_hex2("LOGVIEW", "bytes=", (uint32_t)total, "MiB in=", (uint32_t)(count >> 8));
+
+	/* the lines kept: [from, total) of the byte stream, ring offset n % size, read a chunk at a time */
+	uint64_t from = total > LOG_RING ? total - LOG_RING : 0;
+	static uint8_t line[512];
+	uint32_t n = 0, kept = 0, loaded = ~0u;
+	for (uint64_t p = from; p < total; p++) {
+		uint32_t off = (uint32_t)(p % LOG_RING), chunk = off / (LV_CHUNK * BLOCK);
+		if (chunk != loaded) {
+			if (read_blocks((uint32_t)(base + 1 + (uint64_t)chunk * LV_CHUNK), LV_CHUNK, lv_chunk)) {
+				con_hex2("LOGVIEW", "read error at=", chunk, 0, 0);
+				return;
+			}
+			loaded = chunk;
+		}
+		uint8_t ch = lv_chunk[off % (LV_CHUNK * BLOCK)];
+		if (ch != '\n') {
+			if (n < sizeof(line))
+				line[n++] = ch;
+			continue;
+		}
+		int want = n && lv_wanted(line, n);
+		/* wifid's own questions are too many to read: only configd's and the station's */
+		if (want && lv_has(line, n, "wifid gets"))
+			want = 0;
+		if (want) {
+			uint32_t slot = kept % LV_MAX, m = n > LV_LINE ? LV_LINE : n;
+			for (uint32_t c = 0; c < m; c++)
+				lv_text[slot][c] = (char)line[c];
+			lv_len[slot] = m;
+			kept++;
+		}
+		n = 0;
+	}
+
+	/* rows of 64 characters, a long line on up to 3 rows; newest page last */
+	uint32_t oldest = kept > LV_MAX ? kept - LV_MAX : 0;
+	for (;;) {
+		/* pages, counted back from the end */
+		uint32_t starts[64], pages = 0, i = kept;
+		while (i > oldest && pages < 64) {
+			uint32_t rows = 1;  /* the page title */
+			while (i > oldest) {
+				uint32_t len = lv_len[(i - 1) % LV_MAX], r = (len + LV_COLS - 1) / LV_COLS;
+				r = r > 3 ? 3 : r ? r : 1;
+				if (rows + r > LV_ROWS)
+					break;
+				rows += r;
+				i--;
+			}
+			starts[pages++] = i;
+		}
+		if (!pages) {
+			con_str("LOGVIEW", "no Wi-Fi lines in the log");
+			return;
+		}
+		for (uint32_t pg = pages; pg-- > 0;) {
+			uint32_t s = starts[pg], e = pg + 1 < pages + 1 && pg > 0 ? starts[pg - 1] : kept;
+			con_clear(0xff000000U);
+			char title[LV_COLS];
+			static const char t[] = "LOGVIEW page   /   (last boot, Wi-Fi lines)";
+			int tl = 0;
+			while (t[tl]) {
+				title[tl] = t[tl];
+				tl++;
+			}
+			uint32_t shown = pages - pg;
+			title[13] = (char)('0' + shown / 10);
+			title[14] = (char)('0' + shown % 10);
+			title[16] = (char)('0' + pages / 10);
+			title[17] = (char)('0' + pages % 10);
+			con_small(24, title, tl, YELLOW, 0xff000000U);
+			int y = 24 + 32;
+			for (uint32_t k = s; k < e; k++) {
+				const char *txt = lv_text[k % LV_MAX];
+				uint32_t len = lv_len[k % LV_MAX];
+				for (uint32_t r = 0; r < 3 && r * LV_COLS < len; r++) {
+					uint32_t m = len - r * LV_COLS;
+					m = m > LV_COLS ? LV_COLS : m;
+					con_small(y, txt + r * LV_COLS, (int)m, r ? 0xffc0c0c0U : WHITE, 0xff000000U);
+					y += 32;
+				}
+			}
+			lv_wait_s(20);
+		}
+	}
+}

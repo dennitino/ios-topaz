@@ -557,6 +557,12 @@ void shim_main(uint64_t dtb)
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
 	con_hex2("MIDR", "el1=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
 	show_panel(dtb);
+#ifdef LOGVIEW
+	/* Log viewer only: no xnu boot afterwards (Power + Vol- to leave). */
+	logview_run();
+	for (;;)
+		__asm__ volatile("wfe");
+#endif
 #ifdef TOUCHLAB
 	/* Touch test bench only: no xnu boot afterwards (Power + Vol- to leave). */
 	touchlab_run();
