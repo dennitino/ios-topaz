@@ -24,8 +24,8 @@ O chip da tela paralela devolve só zeros quando a leitura começa no registrado
 devolve os toques quando começa no **0x01**, que é como o driver do Android lê. Descoberto com o
 laboratório da shim (`shim/touchlab.c`, `SHIM_CFLAGS=-DTOUCHLAB`). Correção:
 `xnu/patches/0951-topaz-touch-read-from-reg-01.patch`. Testado no aparelho com o kernel
-`e477291` alterado direto no binário (3 instruções em `_touch_thread`); o toque levou até a tela
-inicial.
+`e477291` alterado direto no binário (3 instruções em `_touch_thread`), depois com o kernel
+compilado da branch `denis` (run 41002427011, 30/10/2026): toque funcionando nos dois.
 
 ### Diagnóstico do toque
 
