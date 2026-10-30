@@ -506,7 +506,7 @@ static uint32_t to_us(uint64_t ticks)
 /*
  * Show which display panel ABL detected (msm_drm.dsi_display0=... in the
  * bootargs it passes). topaz ships with panels m7 38 0c 0a and 0c 0b; their
- * touch firmware differs. Kept on screen for 15 s.
+ * touch firmware differs. No extra wait: the shim's own 8 s pause shows it.
  */
 static void show_panel(uint64_t dtb)
 {
@@ -542,8 +542,6 @@ static void show_panel(uint64_t dtb)
 		label = "";
 		p += i;
 	}
-	con_str("PANEL", "photo now - 15 s");
-	delay_ms(15000);
 }
 
 void shim_main(uint64_t dtb)
