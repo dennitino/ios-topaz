@@ -1,0 +1,73 @@
+From: dennitino <alanw6118@gmail.com>
+Date: Fri, 30 Oct 2026 02:30:00 -0300
+Subject: [PATCH] topaz-0952: wifi: join a network given in the boot-args
+
+On a phone where Settings' Wi-Fi password sheet never opens, wifid sends no
+ASSOCIATE and nothing can be joined. Use redwood_sta.c's standing request
+(nothing called it): wifi_ssid=NAME wifi_psk=PASSPHRASE in the boot-args are
+joined as soon as the station is up, and again whenever the radio comes back
+on. A value starting with '#' is a placeholder (no network), so a boot image
+can carry fixed-length placeholders to be filled in later.
+
+--- a/bsd/dev/topaz_sta.c
++++ b/bsd/dev/topaz_sta.c
+@@ -192,6 +192,51 @@
+ 	.poll = NULL,
+ };
+ 
++/*
++ * topaz: a network given in the boot-args, joined as soon as the station is up and again
++ * whenever the radio is turned back on (redwood_sta.c's standing request). For phones where
++ * iOS never asks for a join: Settings' password sheet does not open there, so wifid sends no
++ * ASSOCIATE. wifi_ssid=NAME wifi_psk=PASSPHRASE (no spaces; 8 to 63 characters, or no
++ * wifi_psk for an open network). A value starting with '#' is a placeholder: no network.
++ */
++static void
++sta_join_boot_network(void)
++{
++	static struct redwood_sta_join what;
++	char ssid[33], psk[64];
++	size_t ssid_length = 0, psk_length = 0;
++	int error;
++
++	bzero(ssid, sizeof(ssid));
++	bzero(psk, sizeof(psk));
++	if (!PE_parse_boot_argn("wifi_ssid", ssid, sizeof(ssid)) || ssid[0] == '\0' || ssid[0] == '#') {
++		return;
++	}
++	ssid[sizeof(ssid) - 1] = '\0';
++	ssid_length = strlen(ssid);
++	if (PE_parse_boot_argn("wifi_psk", psk, sizeof(psk)) && psk[0] != '#') {
++		psk[sizeof(psk) - 1] = '\0';
++		psk_length = strlen(psk);
++	}
++	if (ssid_length > sizeof(what.ssid) || (psk_length != 0 && (psk_length < 8 || psk_length > 63))) {
++		printf("topaz wifi: boot network: bad wifi_ssid/wifi_psk length (%zu/%zu)\n", ssid_length, psk_length);
++		return;
++	}
++	bzero(&what, sizeof(what));
++	what.ssid_length = (uint8_t)ssid_length;
++	memcpy(what.ssid, ssid, ssid_length);
++	if (psk_length != 0) {
++		what.security = REDWOOD_STA_WPA2_PSK;
++		what.passphrase_length = (uint8_t)psk_length;
++		memcpy(what.passphrase, psk, psk_length);
++	} else {
++		what.security = REDWOOD_STA_OPEN;
++	}
++	error = redwood_sta_ask_join_standing(&what);
++	printf("topaz wifi: boot network %s (%s): join asked, %d\n", ssid, psk_length ? "WPA2" : "open", error);
++	bzero(psk, sizeof(psk));
++}
++
+ /* from the modem thread, once the radio is up: keep it short, the work goes on a thread */
+ static void
+ sta_bring_up(__unused void *arg, __unused wait_result_t wr)
+@@ -203,6 +248,7 @@
+ 	if (redwood_net_attach(&sta_link)) {
+ 		redwood_sta_attach(&sta_ops);
+ 		printf("topaz wifi: en0 and the station are up for iOS\n");
++		sta_join_boot_network();
+ 	}
+ 	thread_terminate(current_thread());
+ }
