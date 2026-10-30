@@ -75,3 +75,14 @@ reportada (`m7 38 0c 0a`) são os mesmos da device tree oficial.
   fastboot boot shim-ios.img
   ```
   O boot é só na memória: a cada religada, precisa do PC.
+
+## Wi-Fi (30/10/2026)
+
+- Com o patch 0952 (`wifi_ssid=`/`wifi_psk=` nas opções de boot) o kernel entra na rede sozinho:
+  scan, autenticação, associação, handshake WPA2 (mensagem 1 → 2 enviada) e `net: the link (wcn3988) is up`.
+  Senha certa (com senha errada o kernel diz "wrong passphrase").
+- Mesmo assim o iOS não usa a conexão: o `wifid` só lê SSID/BSSID, o `configd` não mexe no `en0`
+  depois do link e nenhum quadro sai (0 enviados), ou seja, não há DHCP.
+- Hipótese: o `configd` só configura IP quando a entrada na rede foi pedida pelo próprio `wifid`
+  (Ajustes). A tela de senha não abre aqui, então o próximo teste é uma **rede aberta** (sem senha),
+  que o `wifid` pede sem abrir a tela de senha.
