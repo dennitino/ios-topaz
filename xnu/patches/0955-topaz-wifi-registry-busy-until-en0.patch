@@ -1,0 +1,95 @@
+From: dennitino <alanw6118@gmail.com>
+Date: Fri, 30 Oct 2026 06:05:00 -0300
+Subject: [PATCH] topaz-0955: wifi: hold the registry busy until en0 exists
+
+configd only ever asks en0 for its media (flags 0x8802: never brought up)
+and never starts DHCP: en0 has no network service. The interface namer said
+the registry was quiet before the modem had booted and en0 existed, so the
+network services were set up without it. With modem=1 wifi=1 the
+IONetworkStack stand-in now holds the registry busy until RedwoodWLANStart
+has published the radio's interface (30 s at most).
+
+--- a/iokit/Kernel/arm/MiniIONetworkStack.cpp
++++ b/iokit/Kernel/arm/MiniIONetworkStack.cpp
+@@ -20,8 +20,43 @@
+ #include <IOKit/IOUserClient.h>
+ #include <sys/systm.h>
+ #include <sys/proc.h>
++#include <pexpert/pexpert.h>
++#include <kern/thread.h>
+ 
+ extern "C" void MiniIONetworkStackStart(void);
++extern "C" void MiniIONetworkStackRadioUp(void);
++
++/*
++ * topaz-0955: with the radio (boot-args modem=1 wifi=1) the registry is held busy until its
++ * interface exists (RedwoodWLANStart), at most 30 s. configd's namer says "*QUIET*" only after
++ * that, so en0 is among the interfaces configd knows when it sets up the network services:
++ * otherwise the modem is still booting at that moment, en0 comes a moment later, has no service,
++ * and nothing ever starts DHCP on it.
++ */
++static IOService * hold_service;
++static volatile UInt32 hold_on;
++
++static void
++hold_release(const char * why)
++{
++	if (OSCompareAndSwap(1, 0, &hold_on) && hold_service != NULL) {
++		hold_service->adjustBusy(-1);
++		IOLog("MiniIONetworkStack: the registry is no longer held busy (%s)\n", why);
++	}
++}
++
++static void
++hold_timeout(void * parameter __unused, wait_result_t result __unused)
++{
++	IOSleep(30000);
++	hold_release("30 s and no radio");
++}
++
++void
++MiniIONetworkStackRadioUp(void)
++{
++	hold_release("the radio's interface exists");
++}
+ 
+ class IONetworkStack : public IOService
+ {
+@@ -42,6 +77,21 @@
+ 	setProperty(kIOUserClientClassKey, "IONetworkStackUserClient");
+ 	setName("IONetworkStack");
+ 	registerService();
++
++	int modem = 0, wifi = 0;
++	thread_t thread;
++
++	if (PE_parse_boot_argn("modem", &modem, sizeof(modem)) && modem != 0 &&
++	    PE_parse_boot_argn("wifi", &wifi, sizeof(wifi)) && wifi != 0 && hold_service == NULL) {
++		retain();
++		hold_service = this;
++		hold_on = 1;
++		adjustBusy(1);
++		IOLog("MiniIONetworkStack: the registry is held busy until the radio's interface exists\n");
++		if (kernel_thread_start(hold_timeout, NULL, &thread) == KERN_SUCCESS) {
++			thread_deallocate(thread);
++		}
++	}
+ 	return true;
+ }
+ 
+--- a/iokit/Kernel/arm/RedwoodWLAN.cpp
++++ b/iokit/Kernel/arm/RedwoodWLAN.cpp
+@@ -31,6 +31,7 @@
+ #include <libkern/c++/OSNumber.h>
+ 
+ extern "C" void RedwoodWLANStart(const char * interface, const uint8_t * address);
++extern "C" void MiniIONetworkStackRadioUp(void);        /* topaz-0955: the registry may go quiet now */
+ 
+ class IO80211Controller : public IOService
+ {
+@@ -134,4 +135,5 @@
+ 		wlan->release();
+ 	}
+ 	controller->release();
++	MiniIONetworkStackRadioUp();
+ }
