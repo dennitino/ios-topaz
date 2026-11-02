@@ -1,0 +1,83 @@
+From: dennitino <alanw6118@gmail.com>
+Date: Mon, 2 Nov 2026 09:50:00 -0300
+Subject: [PATCH] topaz-0956: wifi: the controller is an IONetworkController (as HackiOS)
+
+configd never made a network service for en0 here. HackiOS's current
+drivers/wifi/hakios.wlan.cpp, whose configd does make a "Wi-Fi" service by
+itself, differs from ours in this: IO80211Controller derives from
+IOEthernetController and IONetworkController, sits under the device tree's
+"wlan" node, and the radio's address is that node's local-mac-address.
+Do the same.
+
+--- a/iokit/Kernel/arm/RedwoodWLAN.cpp
++++ b/iokit/Kernel/arm/RedwoodWLAN.cpp
+@@ -33,12 +33,32 @@
+ extern "C" void RedwoodWLANStart(const char * interface, const uint8_t * address);
+ extern "C" void MiniIONetworkStackRadioUp(void);        /* topaz-0955: the registry may go quiet now */
+ 
+-class IO80211Controller : public IOService
++/*
++ * topaz-0956 (from HackiOS drivers/wifi/hakios.wlan.cpp): the controller is an IOEthernetController
++ * and so an IONetworkController, as in IO80211Family, under the device tree's "wlan" node when
++ * there is one, and the radio's address is that node's local-mac-address (where MobileGestalt
++ * reads it first). HackiOS's configd makes a "Wi-Fi" network service of this by itself.
++ */
++class IONetworkController : public IOService
++{
++	OSDeclareDefaultStructors(IONetworkController);
++};
++
++OSDefineMetaClassAndStructors(IONetworkController, IOService);
++
++class IOEthernetController : public IONetworkController
++{
++	OSDeclareDefaultStructors(IOEthernetController);
++};
++
++OSDefineMetaClassAndStructors(IOEthernetController, IONetworkController);
++
++class IO80211Controller : public IOEthernetController
+ {
+ 	OSDeclareDefaultStructors(IO80211Controller);
+ };
+ 
+-OSDefineMetaClassAndStructors(IO80211Controller, IOService);
++OSDefineMetaClassAndStructors(IO80211Controller, IOEthernetController);
+ 
+ class IONetworkInterface : public IOService
+ {
+@@ -93,6 +113,8 @@
+ RedwoodWLANStart(const char * interface, const uint8_t * address)
+ {
+ 	IOService * platform = IOService::getPlatform();
++	OSDictionary * match = IOService::nameMatching("wlan");
++	IOService * node = match != NULL ? IOService::copyMatchingService(match) : NULL;   /* the device tree's */
+ 	IO80211Controller * controller = OSTypeAlloc(IO80211Controller);
+ 	RedwoodWLAN * wlan = OSTypeAlloc(RedwoodWLAN);
+ 	OSData * mac;
+@@ -101,15 +123,24 @@
+ 	if (platform == NULL || controller == NULL || wlan == NULL || !controller->init() || !wlan->init()) {
+ 		OSSafeReleaseNULL(controller);
+ 		OSSafeReleaseNULL(wlan);
++		OSSafeReleaseNULL(node);
++		OSSafeReleaseNULL(match);
+ 		IOLog("RedwoodWLAN: cannot create the services\n");
+ 		return;
+ 	}
+ 	if ((mac = OSData::withBytes(address, 6)) != NULL) {
+ 		controller->setProperty("IOMACAddress", mac);
++		if (node != NULL) {
++			node->setProperty("local-mac-address", mac);
++		}
+ 		mac->release();
+ 	}
+ 	controller->setProperty("IOBuiltin", true);
+-	if ((controller = (IO80211Controller *) publish(controller, platform, "RedwoodWLANController")) == NULL) {
++	OSSafeReleaseNULL(match);
++	IOLog("RedwoodWLAN: the controller goes under %s\n", node != NULL ? "the device tree's wlan node" : "the platform");
++	controller = (IO80211Controller *) publish(controller, node != NULL ? node : platform, "RedwoodWLANController");
++	OSSafeReleaseNULL(node);
++	if (controller == NULL) {
+ 		wlan->release();
+ 		IOLog("RedwoodWLAN: the controller did not start\n");
+ 		return;
