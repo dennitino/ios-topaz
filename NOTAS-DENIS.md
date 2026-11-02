@@ -86,3 +86,10 @@ reportada (`m7 38 0c 0a`) são os mesmos da device tree oficial.
 - Hipótese: o `configd` só configura IP quando a entrada na rede foi pedida pelo próprio `wifid`
   (Ajustes). A tela de senha não abre aqui, então o próximo teste é uma **rede aberta** (sem senha),
   que o `wifid` pede sem abrir a tela de senha.
+
+### Wi-Fi conectado (02/11/2026)
+
+Com os patches 0953 (rede do boot mostrada como aberta ao wifid), 0955 (IOKit ocupado até o en0
+existir) e 0956 (controlador como IONetworkController, igual ao HackiOS atual), kernel da run
+41446579169, iOS regravado e primeiro boot já com a imagem de Wi-Fi: Ajustes mostra o ✓ na rede
+e o ícone do Wi-Fi na barra de status.
