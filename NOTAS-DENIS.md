@@ -92,4 +92,4 @@ reportada (`m7 38 0c 0a`) são os mesmos da device tree oficial.
 Com os patches 0953 (rede do boot mostrada como aberta ao wifid), 0955 (IOKit ocupado até o en0
 existir) e 0956 (controlador como IONetworkController, igual ao HackiOS atual), kernel da run
 41446579169, iOS regravado e primeiro boot já com a imagem de Wi-Fi: Ajustes mostra o ✓ na rede
-e o ícone do Wi-Fi na barra de status.
+e o ícone do Wi-Fi na barra de status. **Internet funcionando:** o Safari abre o Google e faz buscas.
