@@ -93,3 +93,25 @@ Com os patches 0953 (rede do boot mostrada como aberta ao wifid), 0955 (IOKit oc
 existir) e 0956 (controlador como IONetworkController, igual ao HackiOS atual), kernel da run
 41446579169, iOS regravado e primeiro boot já com a imagem de Wi-Fi: Ajustes mostra o ✓ na rede
 e o ícone do Wi-Fi na barra de status. **Internet funcionando:** o Safari abre o Google e faz buscas.
+
+## Atualizações dos projetos (10/11/2026)
+
+- **ios-topaz original (MakrSas):** a branch `topaz` continua em `e477291` (22/10). O kernel dela, que é a
+  base do nosso, já traz desligados: GPU (0901–0929, `gpu=1`), kernel de páginas 4K + AMP para os 8 núcleos
+  (0140–0142), som (0144–0146, `adsp=1`), carregador (0148) e injeção de bibliotecas (0919, `topaz_inject=`).
+  Falta a parte de usuário da GPU (Mesa + EAGL), que o projeto compila num Mac (`userland/mesa/mk-mesa-mac.sh`).
+  Com a GPU o autor mediu 25–35 quadros por segundo nas animações.
+- **HakiOS 2.3.4 (5/11):** só no POCO X5 Pro 5G. Metal na Adreno 642L (100–118 quadros por segundo), 8 núcleos,
+  som e microfone, câmeras, vibração, `/private/var` mantido entre boots, SSH e Sileo; celular parcial; sem
+  Bluetooth, sem carga sob esse kernel e sem serviços da Apple. O motor Metal recusa outras GPUs pelo nome.
+- **Fork `NekomiyaRion-nya/ios-topaz`, branch `spes`** (Redmi Note 11, mesmo SM6225; último commit em 23/10):
+  - `userland/mesa/mk-mesa-linux.sh` e `userland/gpu/build-linux.sh`: a parte de usuário da GPU compilada no
+    Linux (clang-17, ld64.lld, SDK iPhoneOS 16.5 do theos), sem Mac;
+  - patch `0965-spes-boot-files` + `mkpayload.py --files`: a imagem de boot leva arquivos e o kernel os instala
+    na raiz do iOS antes do launchd (só os que faltam ou mudaram), sem regravar a `userdata`;
+  - USB no SM6225 (0148–0150, 0969) para log ao vivo pelo cabo.
+- **Fuso horário (pista do HakiOS, `userland/build.sh`):** os atalhos do modelo formam um círculo
+  (`/usr/share/zoneinfo` aponta de volta para `/var`) até o daemon de fuso rodar. Eles apontam
+  `/private/var/db/timezone/zoneinfo` para `/usr/share/zoneinfo.default` e o `localtime` para o fuso desejado.
+- **Brilho (`sweetbl=1`):** sem GPU o CoreBrightness aplica um filtro em cada quadro e a interface cai para
+  menos de 1 quadro por segundo (comentário do patch 0110). Só vale testar depois da GPU.
